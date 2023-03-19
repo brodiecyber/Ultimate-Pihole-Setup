@@ -1,0 +1,197 @@
+# Ultimate Pihole
+#################################################################################
+#Pihole and Unbound
+#We can now add extra privacy fetures to pihole usinge unbound.
+#There are some extra steps involved in setting up this up as the documentaion
+#discribeds an instace of pihole with unbound on the host.
+
+#Prerequisitse
+#Have pihole running as a container with network host access and wth web port something other than 80. 
+#Ive used port 8080 in the doker compose example.
+
+#################################################################################
+#Docker compose yaml layout
+
+
+  pihole:                                                    
+    container_name: pihole                                   #The name of the container
+    image: pihole/pihole:latest                              #The docker image used
+    hostname: pihole                                         #The hostname of the container 
+    network_mode: "host"                                     #IMPORTANT Exopese the conatiner to all ports on the host
+#    ports:                                                  #Ports are ignored when container netowrk is set to host
+#      - 53:53/tcp
+#      - 53:53/udp
+#      - 67:67/udp
+#      - 8080:80
+    environment:
+      - TZ=Africa/Johannesburg                               #Your time zone 
+      - WEBPASSWORD=PASSWORD                                 #IMPORTANT The pihole web interface password
+      - PIHOLE_DNS_=127.0.0.1#5335                           #IMPORTANT This will tell pihole to use local unbound server
+      - WEB_PORT=8080                                        #IMPORTANT Changes the web ui port for pihole
+    volumes:
+      - /home/serveradmin/config/pihole:/etc/pihole          #PIHOLE  config persistant location
+      - /home/serveradmin/config/dnsmasq:/etc/dnsmasq.d      #DNSMASQ config persistant location needed for dhcp
+    cap_add:     
+      - NET_ADMIN                                            #Needed for DHCP
+    restart: unless-stopped                                  #restart the container unless stopped
+
+
+#Remember to have the container up and running or you will get an error port 53 is used.
+#################################################################################
+#With pihole up and running we can now setup unbound.
+#Unbound is available in most package managers. 
+
+#For debain simply run the following to install unbound.
+sudo apt install unbound
+
+#If you run.
+sudo systemctl ststus unbound
+
+#You will see that unbound has failed to start.
+#This is because by default unbound works on port 53 but it is already allocated to the pihole comntainer.
+#Now we can configure unbound to work on port 5335.
+
+#Make the following config file with.
+sudo nano /etc/unbound/unbound.conf.d/pi-hole.conf
+
+#copy the following text.
+#################################################################################
+
+server:
+    # If no logfile is specified, syslog is used
+    # logfile: "/var/log/unbound/unbound.log"
+    verbosity: 0
+
+    interface: 127.0.0.1
+    port: 5335
+    do-ip4: yes
+    do-udp: yes
+    do-tcp: yes
+
+    # May be set to yes if you have IPv6 connectivity
+    do-ip6: no
+
+    # You want to leave this to no unless you have *native* IPv6. With 6to4 and
+    # Terredo tunnels your web browser should favor IPv4 for the same reasons
+    prefer-ip6: no
+
+    # Use this only when you downloaded the list of primary root servers!
+    # If you use the default dns-root-data package, unbound will find it automatically
+    #root-hints: "/var/lib/unbound/root.hints"
+
+    # Trust glue only if it is within the server's authority
+    harden-glue: yes
+
+    # Require DNSSEC data for trust-anchored zones, if such data is absent, the zone becomes BOGUS
+    harden-dnssec-stripped: yes
+
+    # Don't use Capitalization randomization as it known to cause DNSSEC issues sometimes
+    # see https://discourse.pi-hole.net/t/unbound-stubby-or-dnscrypt-proxy/9378 for further details
+    use-caps-for-id: no
+
+    # Reduce EDNS reassembly buffer size.
+    # Suggested by the unbound man page to reduce fragmentation reassembly problems
+    edns-buffer-size: 1472
+
+    # Perform prefetching of close to expired message cache entries
+    # This only applies to domains that have been frequently queried
+    prefetch: yes
+
+    # One thread should be sufficient, can be increased on beefy machines. In reality for most users running on small networks or on a single machine, it should be unnecessary to seek performance enhancement by increasing num-threads above 1.
+    num-threads: 1
+
+    # Ensure kernel buffer is large enough to not lose messages in traffic spikes
+    so-rcvbuf: 1m
+
+    # Ensure privacy of local IP ranges
+    private-address: 192.168.0.0/16
+    private-address: 169.254.0.0/16
+    private-address: 172.16.0.0/12
+    private-address: 10.0.0.0/8
+    private-address: fd00::/8
+    private-address: fe80::/10
+
+#################################################################################
+#Start unbound
+sudo systemctl start unbound
+
+#Cheak that it is running with.
+sudo systemctl status unbound
+
+#if in the green we can now verify that unbound can perform a quiery. Run the following.
+dig pi-hole.net @127.0.0.1 -p 5335
+
+#And you should see the following.
+#################################################################################
+
+; <<>> DiG 9.16.37-Debian <<>> pi-hole.net @127.0.0.1 -p 5335
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 43574
+;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 1472
+;; QUESTION SECTION:
+;pi-hole.net.                   IN      A
+
+;; ANSWER SECTION:
+pi-hole.net.            300     IN      A       3.18.136.52
+
+;; Query time: 232 msec
+;; SERVER: 127.0.0.1#5335(127.0.0.1)
+;; WHEN: Sun Mar 19 16:16:53 SAST 2023
+;; MSG SIZE  rcvd: 56
+
+#################################################################################
+#This means that unbound is working
+
+#IMPORTANT remember to have the upstream dns server in pihole set to.
+127.0.0.1#5335
+#This will ensure all dns quieries from pihole go to unbound and then to the authoritative dns server.
+#But is you set up pihole with the docker compose file it should be setup already.
+
+#Your first quieries will be slow as unbound is searching for the resolts to forward to pihole.
+#Once the quieries are awnsered pihole will cache the awnsers and lookups will be alot quicker for those domains.
+
+#In pihole you should see quieries being awnsered like so.
+OK (answered by localhost#5335)
+
+#################################################################################
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
