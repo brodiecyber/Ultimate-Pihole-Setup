@@ -1,0 +1,110 @@
+##############################################################################
+#INSTALL CERTBOT
+
+sudo apt update
+sudo apt install snapd
+sudo snap install core
+sudo snap refresh core
+sudo snap install --classic certbot
+sudo ln -s /snap/bin/certbot /usr/bin/certbot
+sudo snap set certbot trust-plugin-with-root=ok
+sudo snap install certbot-dns-cloudflare
+
+nano cloudflare.ini
+
+#past
+
+dns_cloudflare_api_token = 0123456789abcdef0123456789abcdef01234567
+
+chmod 600 cloudflare.ini
+
+##############################################################################
+# HAPROXY CONF
+defaults
+    timeout connect 5s
+    timeout client 1m
+    timeout server 1m
+    mode http
+
+frontend wildcardhome
+   bind *:80
+#   bind *:443 ssl crt /etc/ssl/MYDOMAIN.co.za.pem
+#   http-request redirect scheme https unless { ssl_fc }
+
+   acl letsencrypt-acl path_beg /.well-known/acme-challenge/
+   use_backend letsencrypt-backend if letsencrypt-acl
+
+   acl nextcloud hdr(host) -i MYDOMAIN.co.za
+   use_backend nextcloud if nextcloud
+
+   default_backend nothing
+
+backend letsencrypt-backend
+  server certbot 127.0.0.1:8899
+
+backend nothing
+
+backend nextcloud
+  server nextcloud nextcloud:80 check
+##############################################################################
+#Get Cert 
+certbot certonly \
+  --dns-cloudflare \
+  --dns-cloudflare-credentials /home/serveradmin/cloudflare.ini \
+  --http-01-port=8899 \
+  --non-interactive \
+  --agree-tos \
+  --email YOUREMAIL@gmail.com \
+  -d *.MYDOMAIN.co.za
+
+
+cat /etc/letsencrypt/live/MYDOMAIN.co.za/fullchain.pem /etc/letsencrypt/live/MYDOMAIN.co.za/privkey.pem > /etc/ssl/MYDOMAIN.co.za.pem
+##############################################################################
+# create a renew script
+
+nano certrenew.sh
+
+chmod +x certnew.sh
+
+##############################################################################
+#!/usr/bin/env bash
+
+# Renew the certificate
+certbot renew #--force-renewal
+
+# Concatenate new cert files
+bash -c "sudo cat /etc/letsencrypt/live/MYDOMAIN.co.za/fullchain.pem /etc/letsencrypt/live/MYDOMAIN.co.za/privkey.pem > /etc/ssl/MYDOMAIN.co.za.pem"
+
+# Reload  HAProxy config file, not sure if needed
+docker restart haproxy
+##############################################################################
+#test
+
+./certrenew.sh
+
+##############################################################################
+# Cronjob to renew
+
+add crontab
+#“At 00:00 on day-of-month 1.” 
+0 0 1 * * /home/serveradmin/certrenew.sh
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
