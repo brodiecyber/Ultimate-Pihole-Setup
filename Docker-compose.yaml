@@ -1,0 +1,90 @@
+version: "3"
+services:
+
+###########################################################################
+#SSL LOADBALANCING
+
+  haproxy:
+    image: haproxy
+    hostname: haproxy
+    container_name: haproxy
+    volumes:
+      - /home/serveradmin/config/haproxy/:/usr/local/etc/haproxy/
+      - /home/serveradmin/config/halogs:/var/log
+      - /etc/ssl:/etc/ssl
+    ports:
+      - 80:80
+      - 443:443
+    restart: unless-stopped
+
+###########################################################################
+#DNS RESOLUTION
+
+  pihole:
+    container_name: pihole
+    image: pihole/pihole:latest
+    hostname: pihole
+    network_mode: "host"
+#    ports:
+#      - 53:53/tcp
+#      - 53:53/udp
+#      - 67:67/udp
+#      - 8080:80
+    environment:
+      - TZ=Africa/Johannesburg
+      - WEBPASSWORD=PASSWORD
+      - PIHOLE_DNS_=127.0.0.1#5335
+      - WEB_PORT=8080
+    volumes:
+      - /home/serveradmin/config/pihole:/etc/pihole
+      - /home/serveradmin/config/dnsmasq:/etc/dnsmasq.d
+    cap_add:
+      - NET_ADMIN
+    restart: unless-stopped
+    
+###########################################################################
+#DEFAULT BACKEND FOR HAPROXY
+
+  nginx:
+      image: nginx:latest
+      hostname: nginx
+      container_name: nginx
+      restart: unless-stopped
+     
+###########################################################################
+#NTOP-NG FOR NETWORK MONTIORING
+    
+  ntopng:
+      image: ntop/ntopng:latest
+      hostname: ntopng
+      container_name: ntopng
+      command: '--community -d /var/lib/ntopng -w 3000 -i tun -i wg0 -i eth0 -r 127.0.0.1:6379:PASSWORD'
+      network_mode: "host"
+      restart: unless-stopped
+
+  ntop-redis:
+      image: redis:latest
+      container_name: ntop-redis
+      hostname: ntop-redis
+      command: 'redis-server --appendonly yes --requirepass PASSWORD'
+      restart: always
+      ports:
+        - 6379:6379
+      volumes:
+        - /home/serveradmin/config/ntop-redis:/data
+
+###########################################################################
+#SPEED TEST TO SERVER
+   
+  librespeed:
+      image: lscr.io/linuxserver/librespeed:latest
+      container_name: librespeed
+      hostname: speed
+      environment:
+        - PUID=1000
+        - PGID=1000
+        - TZ=Africa/Johannesburg
+        - PASSWORD=PASSWORD
+      volumes:
+        - /home/serveradmin/config/librespeed:/config
+      restart: unless-stopped
