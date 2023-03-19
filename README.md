@@ -1,5 +1,9 @@
+
 # Ultimate-Pihole-Setup
 How I setup my pihole with recursive dns, ssl certicicates and a VPN
+
+![Unbound logo](https://user-images.githubusercontent.com/94775329/226184524-b348f075-e84b-4d90-8142-acbaa8cad1c8.png)
+
 
 This is how I setup my pihole server with ssl certs for all my homelab services.
 With added privacy with recursive dns and a wiregaurd vpn to connect to from outside your network.
