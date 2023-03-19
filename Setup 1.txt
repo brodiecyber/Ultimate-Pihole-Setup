@@ -1,0 +1,221 @@
+# Ultimate Pihole
+#################################################################################
+#Software used
+
+#software
+#host service
+- wiregaurd
+- certbot
+- unbound
+- nftables
+- fail2ban
+- whois
+- snap
+- openvpn (Optional)
+
+#container services
+- docker 
+  - ntop-ng
+    - ntop-redius
+  - haproxy
+  - pihole
+  - nginx
+  - librespeed
+
+#################################################################################
+#Prerequisite install
+
+#We will use Debain 11.6
+#the order of operations for the install is important because some services when
+#installed in the wrong order can interfere with each other 
+#example unbound and pihole
+
+#We will first install snap as this is the recommned way to install certbot
+#We will need certbot to get and renew a valid wildcard ssl certificate
+#You will need a valid domain name but you dont need to expose port 80 and 443 to
+#the internet. For domain validation to ensure you own the domain we will use cloudflare.
+
+sudo apt update
+sudo apt install snapd
+sudo snap install core
+sudo snap refresh core
+sudo snap install --classic certbot
+sudo ln -s /snap/bin/certbot /usr/bin/certbot
+sudo snap set certbot trust-plugin-with-root=ok
+sudo snap install certbot-dns-cloudflare
+
+#With all the requierd packages for ssl installed we can now setup docker and docker-compose to run
+#and install docker containers. Follow the Docker documentaion for debain because im to lazy too type out the docs so heres the link
+
+https://docs.docker.com/engine/install/debian/
+
+#With docker and compose installed we need to setup the correct directorys for our containers
+#In the directory of your choosing we will use my home directory make the following directorys
+
+mkdir /home/serveradmin/config
+mkdir /home/serveradmin/config/haproxy
+mkdir /home/serveradmin/config/halogs
+mkdir /home/serveradmin/config/pihole
+mkdir /home/serveradmin/config/dnsmasq
+mkdir /home/serveradmin/config/ntop-redis
+mkdir /home/serveradmin/config/librespeed
+
+#Now with these directorys created we need to create the default haproxy.cfg file to tell the container how to work.
+#the location is as follows
+
+nano /home/serveradmin/config/haproxy/haproxy.cfg
+
+#This is a basic config for getting and renewing the ssl cert.
+
+#################################################################################
+#HAPROXY CONFIG  contents
+
+defaults
+    timeout connect 5s
+    timeout client 1m
+    timeout server 1m
+    mode http
+
+frontend wildcardhome                                                # the name of the frontend for haproxy
+   bind *:80                                                         # The frontend and ports haproxy will listen on for http traffic
+#   bind *:443 ssl crt /etc/ssl/MYDOMAIN.co.za.pem                   # The frontend and ports haproxy will listen on for https traffic 
+#   http-request redirect scheme https unless { ssl_fc }             # Will redirect all http traffic to https
+
+   acl letsencrypt-acl path_beg /.well-known/acme-challenge/         # IMPORTANT tells haproxy what to listed for the  acme chalenge for letsencrypt
+   use_backend letsencrypt-backend if letsencrypt-acl                # IMPORTANT tells haproxy what backend to route the request to
+
+   acl pihole hdr(host) -i pihole.MYDOMAIN.co.za                     # An access control list to tell haproxy when it recives what to do when it recives a domain request for pihole.MYDOMAIN.CO.ZA 
+   use_backend pihole if pihole                                      # Tells what backend to use when pihole.MYDOMAIN.CO.ZA is requested
+
+   default_backend nginx                                             # The defult backend when a request dos not mach an access control list
+
+backend letsencrypt-backend                                          # The backend for letsencrypt
+  server certbot 127.0.0.1:8899                                      # certbot backend localhost and port
+
+backend nginx                                                        # the backend nginx
+  server nginx nginx:80 check                                        # nginx backend hostname and port and to cheak if it is active
+
+backend pihole                                                       # the backend pihole
+  server pihole pihole:80 check                                      # pihole backend hostname and port and to cheak if it is active
+
+#################################################################################
+#Now copy the contents of the docker-compose.yaml file and pull the containers with
+
+docker compose pull
+
+#Then run
+
+docker compose up -d 
+
+#This will bring the containers up in the backround
+
+#################################################################################
+#Ensure all containers are up and running and are not restarting every few seconds as this could indicat a misconfiguration
+#We can not requaest our cert from letsencrypt
+#We need to create a ini file that will store our cloudflare api key for the specific domain we want
+
+nano cloudflare.ini
+
+#Past
+#Were 123... is the api token 
+
+dns_cloudflare_api_token = 0123456789abcdef0123456789abcdef01234567
+
+#Now this token is very valuable protect it at all cost as it can be used to validate any new requests to your domain
+#Chmod the ini file with
+
+chmod 600 cloudflare.ini
+
+#Now run the following to request the ssl cert with haproxy running in th backround
+
+certbot certonly \                                                    # invokes certbot to request cert only
+  --dns-cloudflare \                                                  # invokes the cloudflare dns plugin
+  --dns-cloudflare-credentials /home/serveradmin/cloudflare.ini \     # tells certbot were the ini is
+  --http-01-port=8899 \                                               # tells certbot what port to expect the http chalange on
+  --non-interactive \                                                 # tells certbot not to interact with us
+  --agree-tos \                                                       # agrees to the terms of service
+  --email YOUREMAIL@gmail.com \            	                      # you email address where letsencrypt will send notificeations if the cert wil expire
+  -d *.MYDOMAIN.co.za                                                 # the sub domain or wildcard domain we are requesting in this case its a wildcard indecated *
+
+#If no errors occur congtadulations you got a valid ssl cert for your domain
+#You need to concatinate the files so haproxy can use the combine file for ssl
+#change to root user
+
+cat /etc/letsencrypt/live/MYDOMAIN.co.za/fullchain.pem /etc/letsencrypt/live/MYDOMAIN.co.za/privkey.pem > /etc/ssl/MYDOMAIN.co.za.pem
+
+#################################################################################
+#We need to setup out cert to be renewed and ssl certs are only valid for 90 days 
+#We can accoumplish this with a cronjob and simple bash script
+#BUT in order to use the ssl cert with haproxy we also need to concatinate the cert and key
+#this can all be done by the same script as when the cert renews the we need to concatinat the cert and key files again
+#lets create the renew script in our users home folder
+
+cd /home/serveradmin
+
+nano certrenew.sh
+
+##############################################################################
+#Past the contents below and remember to change MYDOMAIN.co.za to your domain.
+
+#!/usr/bin/env bash                                # indicates a bash file 
+
+# Renew the certificate
+certbot renew #--force-renewal                     # tells certbot to renew uncomment --force-renewal to tell cerbot even if the cert is invalid renew it anyway
+
+# Concatenate new cert files
+bash -c "sudo cat /etc/letsencrypt/live/MYDOMAINco.za/fullchain.pem /etc/letsencrypt/live/MYDOMAIN.co.za/privkey.pem > /etc/ssl/MYDOMAIN.co.za.pem"   # Concatenate the file to a .pem file usable by haproxy
+
+# Reload  HAProxy config file, not sure if needed
+docker restart haproxy                             # restarts the haproxy container to use the new cert
+
+
+#save the file
+##############################################################################
+#Remamber to make the script exacutable with 
+
+chmod +x certrenew.sh
+
+#Now we will set the script to run by schedualing a cron job
+
+sudo crontab -e
+
+#and past
+
+#“At 00:00 on day-of-month 1.” 
+0 0 1 * * /home/serveradmin/certrenew.sh
+
+##############################################################################
+#Before we can test the script we need to edit the haproxy config file to and uncomment the https and redirects lines
+#Bring the haproxy container down with
+
+docker compose down
+
+#Uncomment these lines
+
+#   bind *:443 ssl crt /etc/ssl/MYDOMAIN.co.za.pem 
+#   http-request redirect scheme https unless { ssl_fc } 
+
+#and bring the containers up with 
+docker compose up -d
+
+##############################################################################
+#Haproxy now has a valid cert and config to use for routing domain requests for pihole.MYDOMAIN.co.za to
+#https://pihole.MYSDOMAIN.co.za
+
+#In our courrent set up the route has been configured but your dns request are not
+#That is where pihole comes in
+
+#ALL that needs to be done it adding an A record in pihole saying
+
+When a dns request for pihole.MYSDOMAIN.co.za then route it to the ip of the mechine haproxy is running on in our case the same mechine
+pihole is running on.
+
+###############################################################################
+#So if you ever want to add a valid domain with ssl simply bring down haproxy add the acl and backend to haproxy and A record to pihole
+
+
+
+
+
+
+
